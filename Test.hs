@@ -1,12 +1,17 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 -- base
 import Control.Concurrent    (threadDelay)
 import Control.Monad         (forM, forM_, when)
 import Data.Char             (isAscii)
 import Data.List             (intercalate, isPrefixOf)
-import Foreign.C.String      (peekCString, withCString)
+import Data.Bits             (zeroBits)
+import Foreign.C.String      (CString, peekCString, withCString, newCString)
+import Foreign.C.Types       (CUInt)
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array (peekArray)
-import Foreign.Ptr           (Ptr, nullPtr)
+import Foreign.Marshal.Utils (with)
+import Foreign.Ptr           (Ptr, castPtr, nullPtr, nullFunPtr)
 import Foreign.Storable      (Storable(..))
 
 -- HUnit
@@ -17,6 +22,9 @@ import Test.Framework (Test, defaultMain, testGroup)
 
 -- test-framework-hunit
 import Test.Framework.Providers.HUnit (testCase)
+
+-- vulkan
+import Graphics.Vulkan
 
 -- bindings-GLFW
 import Bindings.GLFW
@@ -131,7 +139,7 @@ tests p'mon p'win =
       , testCase "glfwGetWindowAttrib"        $ test_glfwGetWindowAttrib p'win
       , testCase "glfwMaximizeWindow"         $ test_glfwMaximizeWindow p'win
       , testCase "glfwPollEvents"               test_glfwPollEvents
-      , testCase "glfwWaitEvents"               test_glfwWaitEvents
+      --, testCase "glfwWaitEvents"               test_glfwWaitEvents
       , testCase "glfwWaitEventsTimeout"        test_glfwWaitEventsTimeout
       ]
     , testGroup "Input handling"
@@ -586,6 +594,46 @@ test_clipboard p'win = do
 
 --------------------------------------------------------------------------------
 
+createVkInstance :: ( Ptr CString, CUInt ) -> IO VkInstance
+createVkInstance ( p'es, esCount) =
+  withCString "vulkan-test" 
+  (\namePtr -> 
+  with VkApplicationInfo{ vkSType = VK_STRUCTURE_TYPE_APPLICATION_INFO
+                        , vkPNext = nullPtr
+                        , vkPApplicationName = namePtr
+                        , vkApplicationVersion = 1
+                        , vkPEngineName = namePtr
+                        , vkEngineVersion = 0
+                        , vkApiVersion = vkMakeVersion 1 0 3
+                        }
+  (\appInfo -> 
+  with VkInstanceCreateInfo{ vkSType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO
+                           , vkPNext = nullPtr
+                           , vkFlags = VkInstanceCreateFlags zeroBits
+                           , vkPApplicationInfo = appInfo
+                           , vkEnabledLayerCount = 0
+                           , vkPpEnabledLayerNames = nullPtr
+                           , vkEnabledExtensionCount = fromIntegral esCount
+                           , vkPpEnabledExtensionNames = p'es
+                           }
+  (\instInfo -> 
+  alloca
+  (\instPtr -> do
+  _ <- vkCreateInstance instInfo nullPtr instPtr
+  peek instPtr 
+  )))) 
+
+destroyVkInstance :: VkInstance -> IO ()
+destroyVkInstance inst = vkDestroyInstance inst nullPtr
+
+getFirstVkPhysicalDevice :: VkInstance -> IO VkPhysicalDevice
+getFirstVkPhysicalDevice inst = do
+    alloca $ \p'count -> 
+        alloca $ \p'devices -> do 
+            _ <- vkEnumeratePhysicalDevices inst p'count p'devices
+            p'device <- peekElemOff p'devices 0
+            return p'device 
+
 test_glfwVulkanSupported :: IO ()
 test_glfwVulkanSupported = do
     r <- c'glfwVulkanSupported
@@ -594,19 +642,49 @@ test_glfwVulkanSupported = do
 test_glfwGetRequiredInstanceExtensions :: IO ()
 test_glfwGetRequiredInstanceExtensions =
     alloca $ \p'count -> do
-        _ <- c'glfwGetRequiredInstanceExtensions p'count
-        return ()
+        p'es <- c'glfwGetRequiredInstanceExtensions p'count
+        if p'es == nullPtr
+            then assertFailure ""
+            else do
+                r <- fromIntegral `fmap` peek p'count
+                assertBool "" $ r > 0
+                es <- peekArray r p'es >>= mapM peekCString
+                assertBool "" $ "VK_KHR_surface" `elem` es
 
 test_glfwGetInstanceProcAddress :: IO ()
 test_glfwGetInstanceProcAddress = do
-    return ()
+    alloca $ \p'esCount -> do 
+        p'es    <- c'glfwGetRequiredInstanceExtensions p'esCount
+        esCount <- peek p'esCount
+        vkInstance <- createVkInstance ( p'es, esCount )
+        p'validProcName  <- newCString "vkCreateInstance"
+        p'validvkProc    <- c'glfwGetInstanceProcAddress (castPtr vkInstance) p'validProcName
+        assertBool "" $ p'validvkProc /= nullFunPtr
+        p'invalidProcName <- newCString "BADSTRING"
+        p'invalidvkProc <- c'glfwGetInstanceProcAddress (castPtr vkInstance) p'invalidProcName
+        assertBool "" $ p'invalidvkProc == nullFunPtr
+        destroyVkInstance vkInstance
 
 test_glfwGetPhysicalDevicePresentationSupport :: IO ()
 test_glfwGetPhysicalDevicePresentationSupport = do
-    return ()
+    alloca $ \p'esCount -> do
+        p'es    <- c'glfwGetRequiredInstanceExtensions p'esCount
+        esCount <- peek p'esCount
+        vkInstance <- createVkInstance ( p'es, esCount )
+        vkPhysDevice <- getFirstVkPhysicalDevice vkInstance
+        r <- c'glfwGetPhysicalDevicePresentationSupport (castPtr vkInstance) (castPtr vkPhysDevice) 0
+        r @?= 1
+        destroyVkInstance vkInstance
 
 test_glfwCreateWindowSurface :: Ptr C'GLFWwindow -> IO ()
-test_glfwCreateWindowSurface _ = do
-    return ()
+test_glfwCreateWindowSurface p'win = do
+    alloca $ \p'esCount -> do 
+        p'es    <- c'glfwGetRequiredInstanceExtensions p'esCount
+        esCount <- peek p'esCount
+        vkInstance <- createVkInstance ( p'es, esCount )
+        alloca $ \p'vkSurfaceKhr -> do 
+            r <- c'glfwCreateWindowSurface (castPtr vkInstance) p'win nullPtr p'vkSurfaceKhr
+            r @?= 0
+        destroyVkInstance vkInstance  
 
 {-# ANN module "HLint: ignore Use camelCase" #-}

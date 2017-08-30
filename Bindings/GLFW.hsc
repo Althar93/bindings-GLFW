@@ -438,6 +438,22 @@ deriving instance Data     C'GLFWcursor
 -- GLFW 3.2 additions
 --------------------------------------------------------------------------------
 
+data C'VkInstance_T
+type C'VkInstance = Ptr C'VkInstance_T
+
+data C'VkPhysicalDevice_T
+type C'VkPhysicalDevice = Ptr C'VkPhysicalDevice_T
+
+type C'VkResult = CInt
+
+type C'VkSurfaceKHR = CInt
+
+#opaque_t VkAllocationCallbacks
+deriving instance Typeable C'VkAllocationCallbacks
+deriving instance Data     C'VkAllocationCallbacks
+
+#callback GLFWvkproc , IO ()
+
 #ccall glfwFocusWindow , Ptr <GLFWwindow> -> IO ()
 #ccall glfwMaximizeWindow , Ptr <GLFWwindow> -> IO ()
 #ccall glfwSetWindowMonitor , Ptr <GLFWwindow> -> Ptr <GLFWmonitor> -> CInt -> CInt -> CInt -> CInt -> CInt -> IO ()
@@ -451,3 +467,6 @@ deriving instance Data     C'GLFWcursor
 
 #ccall glfwVulkanSupported , IO CInt
 #ccall glfwGetRequiredInstanceExtensions , Ptr CUInt -> IO (Ptr CString)
+#ccall glfwGetInstanceProcAddress , <VkInstance> -> CString -> IO <GLFWvkproc>
+#ccall glfwGetPhysicalDevicePresentationSupport , <VkInstance> -> <VkPhysicalDevice> -> CUInt -> IO CInt
+#ccall glfwCreateWindowSurface , <VkInstance> -> Ptr <GLFWwindow> -> Ptr <VkAllocationCallbacks> -> Ptr <VkSurfaceKHR> -> IO <VkResult>
